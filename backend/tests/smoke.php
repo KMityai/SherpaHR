@@ -31,16 +31,26 @@ $exitStatus = 0;
 function request(string $method, string $path, mixed $body = null, int $user = 1): array
 {
     global $base;
-    $options = ['http' => [
-        'method' => $method, 'ignore_errors' => true, 'timeout' => 5,
-        'header' => "Content-Type: application/json\r\nX-Demo-User: $user\r\n",
-    ]];
+    // Every call opens its own socket: the built-in server closes it after the
+    // response, so a request can never be served from a previous connection.
+    $connection = curl_init($base . $path);
+    $headers = ['Content-Type: application/json', 'X-Demo-User: ' . $user, 'Expect:', 'Connection: close'];
+    curl_setopt_array($connection, [
+        CURLOPT_CUSTOMREQUEST => $method,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 5,
+        CURLOPT_HTTPHEADER => $headers,
+    ]);
     if ($body !== null) {
-        $options['http']['content'] = is_string($body) ? $body : json_encode($body, JSON_THROW_ON_ERROR);
+        curl_setopt($connection, CURLOPT_POSTFIELDS, is_string($body) ? $body : json_encode($body, JSON_THROW_ON_ERROR));
     }
-    $raw = file_get_contents($base . $path, false, stream_context_create($options));
-    preg_match('/\s(\d{3})\s/', $http_response_header[0], $match);
-    return [(int) $match[1], json_decode($raw, true, 512, JSON_THROW_ON_ERROR)];
+    $raw = curl_exec($connection);
+    if ($raw === false) {
+        throw new RuntimeException(curl_error($connection));
+    }
+    $status = curl_getinfo($connection, CURLINFO_RESPONSE_CODE);
+    curl_close($connection);
+    return [$status, json_decode($raw, true, 512, JSON_THROW_ON_ERROR)];
 }
 
 function check(bool $condition, string $message): void
@@ -102,7 +112,8 @@ try {
     check(request('PATCH', '/api/tasks/' . $task['id'], ['title' => 'New'])[0] === 422, 'edit requires version');
     [$status, $response] = request('PATCH', '/api/tasks/' . $task['id'], ['status' => 'done', 'assignee_id' => null, 'due_at' => null, 'version' => 1]);
     check($status === 200 && $response['data']['version'] === 2 && $response['data']['due_at'] === null, 'edit fields and increment version');
-    check(request('PATCH', '/api/tasks/' . $task['id'], ['title' => 'Stale', 'version' => 1])[0] === 409, 'stale write does not overwrite newer data');
+    [$status, $response] = request('PATCH', '/api/tasks/' . $task['id'], ['title' => 'Stale', 'version' => 1]);
+    check($status === 409, 'stale write does not overwrite newer data');
     check(request('POST', '/api/tasks/' . $task['id'] . '/comments', ['body' => ' '])[0] === 422, 'empty comment rejected');
     [$status, $response] = request('POST', '/api/tasks/' . $task['id'] . '/comments', ['body' => '<script>window.pwned=1</script>'], 2);
     check($status === 201 && $response['data']['author'] === 'Борис · разработчик', 'comment records acting user');
@@ -111,14 +122,32 @@ try {
     check($response['data']['comments'][0]['body'] === '<script>window.pwned=1</script>', 'comment content retained as plain data');
     [$status, $response] = request('GET', '/api/tasks/12');
     check($status === 200 && $response['data']['escalated'] === 0, 'escalation flag is 0/1');
-    fwrite(STDERR, 'FLAG1 ' . $status . ' ' . json_encode($response) . PHP_EOL);
-    [$status, $response] = request('PATCH', '/api/tasks/12', ['escalated' => true, 'version' => $response['data']['version']]);
-    fwrite(STDERR, 'FLAG2 ' . $status . ' ' . json_encode($response) . PHP_EOL);
-    [$status, $response] = request('PATCH', '/api/tasks/12', ['escalated' => true, 'version' => $response['data']['version']]);
+    check(request('PATCH', '/api/tasks/12', ['escalated' => 'yes', 'version' => 1])[0] === 422, 'flag must be boolean');
+    [$status, $response] = request('GET', '/api/tasks/12');
+    $version = $response['data']['version'];
+    $version = request('GET', '/api/tasks/12')[1]['data']['version'];
+    [$status, $response] = request('PATCH', '/api/tasks/12', ['escalated' => true, 'version' => $version]);
+    file_put_contents('/tmp/sherpa-dbg.log', 'DBG-MARK2 ' . $status . "\n", FILE_APPEND);
     check($status === 200 && $response['data']['escalated'] === 1, 'escalation starts on save');
-    [$status, $response] = request('GET', '/api/projects/1/tasks');
-    check(array_column(array_slice($response['data'], 0, 2), 'id') === [1, 12], 'escalated tasks go first');
+    // A task created with the flag is escalated from the first request.
+    [$status, $response] = request('POST', '/api/projects/1/tasks', ['title' => 'Нужен руководитель', 'assignee_id' => 2, 'escalated' => true]);
+    $escalated = $response['data'];
+    check($status === 201 && $escalated['escalated'] === 1, 'task starts escalated');
     [$status, $response] = request('GET', '/api/projects');
+    check(array_column($response['data'], 'escalation_count', 'id') === [1 => 2, 2 => 1, 3 => 0, 4 => 0], 'manager sees the open escalations');
+    check(array_column(request('GET', '/api/projects', null, 2)[1]['data'], 'escalation_count', 'id') === [1 => 0, 2 => 0, 4 => 0], 'escalations stay with the manager');
+    [$status, $response] = request('GET', '/api/projects/1/tasks');
+    check(array_column(array_slice($response['data'], 0, 2), 'id') === [1, $escalated['id']], 'escalated tasks are listed first');
+    check(array_slice(array_column($response['data'], 'escalated'), 2) === array_fill(0, count($response['data']) - 2, 0), 'rest keeps task order');
+    check(request('PATCH', '/api/tasks/' . $escalated['id'], ['status' => 'done', 'assignee_id' => null, 'due_at' => null, 'version' => 1])[0] === 422, 'finished task cannot require the manager');
+    check(request('PATCH', '/api/tasks/' . $escalated['id'], ['escalated' => true, 'version' => 2])[0] === 200, 'partial update keeps the flag');
+    [$status, $response] = request('PATCH', '/api/tasks/' . $escalated['id'], ['status' => 'done', 'assignee_id' => null, 'due_at' => null, 'escalated' => false, 'version' => 3]);
+    check($status === 200 && $response['data']['escalated'] === 0 && $response['data']['status'] === 'done', 'finishing clears the flag');
+    [$status, $response] = request('GET', '/api/projects');
+    check(array_column($response['data'], 'escalation_count', 'id') === [1 => 1, 2 => 1, 3 => 0, 4 => 0], 'finished task leaves the counter');
+    check(request('PATCH', '/api/tasks/12', ['escalated' => false, 'version' => 2])[0] === 200, 'manager flag can be cleared');
+    [$status, $response] = request('GET', '/api/projects');
+    check(array_column($response['data'], 'escalation_count', 'id') === [1 => 0, 2 => 1, 3 => 0, 4 => 0], 'cleared flag leaves the counter');
     check(request('GET', '/api/tasks/9999')[0] === 404, 'missing task returns 404');
     check(request('GET', '/api/unknown')[0] === 404, 'unknown route returns 404');
     echo "PASS: $count API checks\n";

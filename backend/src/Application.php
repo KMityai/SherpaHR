@@ -180,14 +180,12 @@ final class Application
         }
         $status = $out['status'] ?? null;
         $escalated = $out['escalated'] ?? null;
-        error_log('DBG status=' . var_export($status, true) . ' esc=' . var_export($escalated, true) . ' out=' . json_encode($out));
         // A full update always carries a status; a partial one only when it is sent.
         if ($status === 'done' || ($status === null && $escalated === true)) {
             // A finished task never requires the manager, so the pair cannot stay inconsistent.
             if ($escalated === true) {
                 throw new ApiError('Завершённая задача не может требовать руководителя', 422);
             }
-            # DEBUG2
             $out['escalated'] = false;
         }
         if (!$project['archived']) {
@@ -199,7 +197,6 @@ final class Application
         if (($out['escalated'] ?? false) !== false) {
             throw new ApiError('Архивный проект не участвует в эскалации', 422);
         }
-        # DEBUG
         return $out;
     }
 
