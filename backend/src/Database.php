@@ -3,6 +3,9 @@ declare(strict_types=1);
 
 final class Database
 {
+    // 1: initial dataset. 2: task escalation to the project manager.
+    private const SCHEMA_VERSION = 2;
+
     public static function connect(): PDO
     {
         $path = getenv('DB_PATH') ?: __DIR__ . '/../../var/project-desk.sqlite';
@@ -24,7 +27,11 @@ final class Database
         $db->exec('BEGIN IMMEDIATE');
         try {
             $db->exec('CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-            if ($db->query("SELECT value FROM metadata WHERE key = 'schema_version'")->fetchColumn()) {
+            $version = (int) $db->query("SELECT value FROM metadata WHERE key = 'schema_version'")->fetchColumn();
+            if ($version > 0) {
+                if ($version < self::SCHEMA_VERSION) {
+                    self::migrate($db, $version);
+                }
                 $db->exec('COMMIT');
                 return;
             }
@@ -36,6 +43,23 @@ final class Database
             throw $error;
         }
     }
+
+    /**
+     * Existing volumes keep their data, so new columns are added step by step.
+     * Every step must be safe to repeat: a crash between DDL and version bump
+     * must not break the next start.
+     */
+    private static function migrate(PDO $db, int $version): void
+    {
+        $columns = array_column($db->query('PRAGMA table_info(tasks)')->fetchAll(), 'name');
+        if (!in_array('escalated', $columns, true)) {
+            $db->exec('ALTER TABLE tasks ADD COLUMN escalated INTEGER NOT NULL DEFAULT 0 CHECK(escalated IN (0, 1))');
+        }
+        // Finished tasks never require the manager, even in data written before v2.
+        $db->exec("UPDATE tasks SET escalated = 0 WHERE status = 'done' AND escalated = 1");
+        $db->prepare('UPDATE metadata SET value = ? WHERE key = ?')->execute([(string) self::SCHEMA_VERSION, 'schema_version']);
+    }
+
 
     private static function seed(PDO $db): void
     {
@@ -53,24 +77,25 @@ final class Database
             $project->execute($row);
         }
         $db->exec('INSERT INTO project_members VALUES (1,1),(1,2),(1,3),(2,1),(2,2),(3,1),(3,3),(4,1),(4,2),(5,3)');
-        $task = $db->prepare('INSERT INTO tasks (id, project_id, title, description, status, assignee_id, due_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+        $task = $db->prepare('INSERT INTO tasks (id, project_id, title, description, status, assignee_id, due_at, escalated, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $rows = [
-            [1, 1, 'Согласовать схему обмена', 'Нужно решение по формату документов до подключения клиента.', 'blocked', 2, '+1 day', '-2 days'],
+            [1, 1, 'Согласовать схему обмена', 'Нужно решение по формату документов до подключения клиента.', 'blocked', 2, '+1 day', '-2 days', 1],
             [2, 1, 'Проверить загрузку документов', 'Проверить типовые документы в личном кабинете.', 'in_progress', 3, '-1 day', '-3 hours'],
             [3, 1, 'Обновить приветственное письмо', 'Согласованный текст уже передан в поддержку.', 'done', 2, '-4 days', '-2 days'],
             [4, 1, 'Подготовить демонстрацию', 'Собрать пользовательский сценарий для встречи.', 'open', 1, '+5 days', '-1 day'],
             [5, 2, 'Получить доступ к источнику', 'Финансовый отдел ждёт решение владельца источника.', 'blocked', 2, '-2 days', '-4 days'],
             [6, 2, 'Проверить сверку итогов', 'Сравнить агрегаты с утверждённым примером.', 'in_progress', 2, '+3 days', '-2 hours'],
-            [7, 2, 'Определить владельца справочника', 'Справочник используется двумя командами.', 'open', null, null, '-3 days'],
+            [7, 2, 'Определить владельца справочника', 'Справочник используется двумя командами.', 'open', null, null, '-3 days', 1],
             [8, 3, 'Опубликовать инструкцию оператора', 'Текст вычитан, публикация запланирована.', 'in_progress', 3, '+7 days', '-1 hour'],
             [9, 3, 'Согласовать структуру разделов', 'Новая структура принята командой поддержки.', 'done', 1, '-3 days', '-2 days'],
-            [10, 4, 'Закрыть старые согласования', 'Историческая задача архивного проекта.', 'blocked', 2, '-30 days', '-31 days'],
+            [10, 4, 'Закрыть старые согласования', 'Историческая задача архивного проекта.', 'blocked', 2, '-30 days', '-31 days', 1],
             [11, 5, 'Подготовить внутреннюю выборку', 'Данные доступны только участникам проекта.', 'blocked', 3, '-1 day', '-2 days'],
             [12, 1, 'Запланировать проверку доступности', 'Обсудить дату с командой.', 'open', 2, null, '-1 hour'],
         ];
         foreach ($rows as $row) {
             $row[6] = $row[6] === null ? null : $stamp($row[6]);
-            $row[7] = $stamp($row[7]);
+            $row[7] = $row[7] ?? 0;
+            $row[8] = $stamp($row[8]);
             $task->execute($row);
         }
         $comment = $db->prepare('INSERT INTO comments (task_id, user_id, body, created_at) VALUES (?, ?, ?, ?)');
@@ -88,7 +113,7 @@ final class Database
             $comment->execute($row);
         }
         $meta = $db->prepare('INSERT INTO metadata VALUES (?, ?)');
-        $meta->execute(['schema_version', '1']);
+        $meta->execute(['schema_version', (string) self::SCHEMA_VERSION]);
         $meta->execute(['seeded_at', $stamp('+0 seconds')]);
     }
 }

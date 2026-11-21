@@ -13,7 +13,11 @@ CREATE TABLE tasks (
     title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','in_progress','blocked','done')),
     assignee_id INTEGER REFERENCES users(id), due_at TEXT,
-    updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1
+    -- 1 means the task is escalated and the project manager has to take part.
+    escalated INTEGER NOT NULL DEFAULT 0 CHECK(escalated IN (0, 1)),
+    updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+    -- A finished task cannot require the manager.
+    CHECK(status <> 'done' OR escalated = 0)
 );
 CREATE TABLE comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL REFERENCES tasks(id),
