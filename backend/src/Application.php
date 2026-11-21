@@ -57,22 +57,29 @@ final class Application
             foreach ($projects as &$project) {
                 $project['archived'] = (bool) $project['archived'];
                 $project['members'] = $this->all('SELECT u.* FROM users u JOIN project_members m ON m.user_id=u.id WHERE m.project_id=? ORDER BY u.id', [$project['id']]);
+                // Escalations are the manager's view only; archived projects are out of the process.
+                $project['escalation_count'] = $this->isManager($project) ? (int) $this->db->query(
+                    'SELECT COUNT(*) FROM tasks WHERE project_id=' . (int) $project['id'] . ' AND escalated=1 AND status<>\'done\''
+                )->fetchColumn() : 0;
             }
+            unset($project);
             $this->respond($projects);
             return;
         }
         if (preg_match('#^/api/projects/(\d+)/tasks$#', $path, $match)) {
             $project = $this->project((int) $match[1]);
             if ($method === 'GET') {
-                $this->respond($this->all('SELECT t.* FROM tasks t JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? ORDER BY t.id', [$project['id']]));
+                // Escalated tasks go first, the rest keeps the previous order.
+                $this->respond($this->all('SELECT t.* FROM tasks t JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? ORDER BY t.escalated DESC, t.id', [$project['id']]));
                 return;
             }
             if ($method === 'POST') {
                 $this->writable($project);
                 $data = $this->input();
-                $fields = $this->validateTask($data, $project['id'], false);
-                $stmt = $this->db->prepare('INSERT INTO tasks (project_id,title,description,status,assignee_id,due_at,updated_at) VALUES (?,?,?,?,?,?,?)');
-                $stmt->execute([$project['id'], $fields['title'], $fields['description'], $fields['status'], $fields['assignee_id'], $fields['due_at'], gmdate('Y-m-d\TH:i:s\Z')]);
+                $fields = $this->validateTask($data, $project, false);
+                $fields = $this->row($fields);
+                $stmt = $this->db->prepare('INSERT INTO tasks (project_id,title,description,status,assignee_id,due_at,escalated,updated_at) VALUES (?,?,?,?,?,?,?,?)');
+                $stmt->execute([$project['id'], $fields['title'], $fields['description'], $fields['status'], $fields['assignee_id'], $fields['due_at'], $fields['escalated'], gmdate('Y-m-d\TH:i:s\Z')]);
                 $this->respond($this->task((int) $this->db->lastInsertId()), 201);
                 return;
             }
@@ -85,15 +92,16 @@ final class Application
                 return;
             }
             if ($method === 'PATCH') {
-                $this->writable($this->project($task['project_id']));
+                $project = $this->project($task['project_id']);
+                $this->writable($project);
                 $data = $this->input();
-                $fields = $this->validateTask($data, $task['project_id'], true);
+                $fields = $this->validateTask($data, $project, true);
                 if (!isset($data['version']) || !is_int($data['version'])) {
                     throw new ApiError('Нужна целочисленная версия задачи', 422);
                 }
-                $updated = array_merge($task, $fields);
-                $stmt = $this->db->prepare('UPDATE tasks SET title=?,description=?,status=?,assignee_id=?,due_at=?,updated_at=?,version=version+1 WHERE id=? AND version=?');
-                $stmt->execute([$updated['title'], $updated['description'], $updated['status'], $updated['assignee_id'], $updated['due_at'], gmdate('Y-m-d\TH:i:s\Z'), $task['id'], $data['version']]);
+                $updated = array_merge($task, $this->row($fields));
+                $stmt = $this->db->prepare('UPDATE tasks SET title=?,description=?,status=?,assignee_id=?,due_at=?,escalated=?,updated_at=?,version=version+1 WHERE id=? AND version=?');
+                $stmt->execute([$updated['title'], $updated['description'], $updated['status'], $updated['assignee_id'], $updated['due_at'], $updated['escalated'], gmdate('Y-m-d\TH:i:s\Z'), $task['id'], $data['version']]);
                 if ($stmt->rowCount() !== 1) {
                     throw new ApiError('Задача изменилась. Откройте её заново перед сохранением.', 409);
                 }
@@ -122,9 +130,9 @@ final class Application
         throw new ApiError('Маршрут не найден', 404);
     }
 
-    private function validateTask(array $data, int $projectId, bool $partial): array
+    private function validateTask(array $data, array $project, bool $partial): array
     {
-        $unknown = array_diff(array_keys($data), ['title', 'description', 'status', 'assignee_id', 'due_at', 'version']);
+        $unknown = array_diff(array_keys($data), ['title', 'description', 'status', 'assignee_id', 'due_at', 'escalated', 'version']);
         if ($unknown) {
             throw new ApiError('Неизвестные поля задачи', 422);
         }
@@ -144,7 +152,7 @@ final class Application
         }
         if (!$partial || array_key_exists('assignee_id', $data)) {
             $id = $data['assignee_id'] ?? null;
-            if ($id !== null && (!is_int($id) || !$this->one('SELECT 1 FROM project_members WHERE project_id=? AND user_id=?', [$projectId, $id]))) {
+            if ($id !== null && (!is_int($id) || !$this->one('SELECT 1 FROM project_members WHERE project_id=? AND user_id=?', [$project['id'], $id]))) {
                 throw new ApiError('Исполнитель должен быть участником проекта', 422);
             }
             $out['assignee_id'] = $id;
@@ -162,7 +170,38 @@ final class Application
             }
             $out['due_at'] = $due;
         }
+        if (!$partial || array_key_exists('escalated', $data)) {
+            $escalated = $data['escalated'] ?? false;
+            if (!is_bool($escalated)) {
+                throw new ApiError('Признак «Нужен руководитель» должен быть true или false', 422);
+            }
+            $out['escalated'] = $escalated;
+        }
+        if (($out['status'] ?? null) === 'done') {
+            // A finished task never requires the manager, so the pair cannot stay inconsistent.
+            if (($out['escalated'] ?? false) === true) {
+                throw new ApiError('Завершённая задача не может требовать руководителя', 422);
+            }
+            $out['escalated'] = false;
+        }
+        if (!$project['archived']) {
+            return $out;
+        }
+        // Archival is read-only for task fields; a flag that is already set cannot be kept either.
+        $unchanged = array_filter($out, fn($value, $key) => (bool) ($data[$key] ?? false) === (bool) $value, ARRAY_FILTER_USE_BOTH);
+        $out = array_intersect_key($out, $unchanged);
+        if (($out['escalated'] ?? false) !== false) {
+            throw new ApiError('Архивный проект не участвует в эскалации', 422);
+        }
         return $out;
+    }
+
+    /**
+     * Validated field values are typed for JSON; the database stores a flag as 0/1.
+     */
+    private function row(array $fields): array
+    {
+        return isset($fields['escalated']) ? array_merge($fields, ['escalated' => (int) $fields['escalated']]) : $fields;
     }
 
     private function text(mixed $value, string $name, int $max, bool $required): string
@@ -200,6 +239,18 @@ final class Application
             throw new ApiError('Проект не найден', 404);
         }
         return $project;
+    }
+
+    /**
+     * Task escalations are shown to the project manager only: the owner of an
+     * active project who holds the manager role (the demo owner is «руководитель»).
+     * Archived projects never take part in escalation.
+     */
+    private function isManager(array $project): bool
+    {
+        return !$project['archived']
+            && (int) $project['owner_id'] === $this->userId
+            && str_contains($this->user['name'] ?? '', 'руководитель');
     }
 
     private function task(int $id): array
