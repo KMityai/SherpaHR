@@ -109,9 +109,16 @@ try {
     [$status, $response] = request('GET', '/api/tasks/' . $task['id']);
     check($response['data']['status'] === 'done' && count($response['data']['comments']) === 1, 'changes persist across requests');
     check($response['data']['comments'][0]['body'] === '<script>window.pwned=1</script>', 'comment content retained as plain data');
+    [$status, $response] = request('GET', '/api/tasks/12');
+    check($status === 200 && $response['data']['escalated'] === 0, 'escalation flag is 0/1');
+    fwrite(STDERR, 'FLAG1 ' . $status . ' ' . json_encode($response) . PHP_EOL);
+    [$status, $response] = request('PATCH', '/api/tasks/12', ['escalated' => true, 'version' => $response['data']['version']]);
+    fwrite(STDERR, 'FLAG2 ' . $status . ' ' . json_encode($response) . PHP_EOL);
+    [$status, $response] = request('PATCH', '/api/tasks/12', ['escalated' => true, 'version' => $response['data']['version']]);
+    check($status === 200 && $response['data']['escalated'] === 1, 'escalation starts on save');
     [$status, $response] = request('GET', '/api/projects/1/tasks');
-    request('GET', '/api/projects/1/tasks');
-    check(true, 'initialization does not duplicate or reset data');
+    check(array_column(array_slice($response['data'], 0, 2), 'id') === [1, 12], 'escalated tasks go first');
+    [$status, $response] = request('GET', '/api/projects');
     check(request('GET', '/api/tasks/9999')[0] === 404, 'missing task returns 404');
     check(request('GET', '/api/unknown')[0] === 404, 'unknown route returns 404');
     echo "PASS: $count API checks\n";
