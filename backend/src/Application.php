@@ -6,6 +6,8 @@ final class ApiError extends RuntimeException {}
 final class Application
 {
     private int $userId = 1;
+    /** Selected demo persona, loaded once per request. */
+    private array $user = [];
 
     public function __construct(private PDO $db) {}
 
@@ -27,6 +29,7 @@ final class Application
                 throw new ApiError('Неизвестный демо-пользователь', 401);
             }
             $this->userId = (int) $header;
+            $this->user = $this->one('SELECT * FROM users WHERE id = ?', [$this->userId]);
             $this->dispatch($method, $path);
         } catch (ApiError $error) {
             http_response_code($error->getCode());
@@ -102,8 +105,19 @@ final class Application
             $task = $this->task((int) $match[1]);
             $this->writable($this->project($task['project_id']));
             $data = $this->input();
-            $this->text($data['body'] ?? null, 'Комментарий', 5000, true);
-            throw new ApiError('Добавление комментариев пока не реализовано', 501);
+            $body = $this->text($data['body'] ?? null, 'Комментарий', 5000, true);
+            $createdAt = gmdate('Y-m-d\TH:i:s\Z');
+            $this->db->prepare('INSERT INTO comments (task_id, user_id, body, created_at) VALUES (?, ?, ?, ?)')
+                ->execute([$task['id'], $this->userId, $body, $createdAt]);
+            $this->respond([
+                'id' => (int) $this->db->lastInsertId(),
+                'task_id' => (int) $task['id'],
+                'user_id' => $this->userId,
+                'body' => $body,
+                'created_at' => $createdAt,
+                'author' => $this->user['name'],
+            ], 201);
+            return;
         }
         throw new ApiError('Маршрут не найден', 404);
     }
