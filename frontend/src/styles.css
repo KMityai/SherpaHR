@@ -139,6 +139,18 @@ input:focus,select:focus,textarea:focus {
   border-color:#d2e8da;
   color:#245b3e;
 }
+.project-link .escalation-count {
+  margin-left:auto;
+  align-self:center;
+  background:#e8710a;
+  color:#fff;
+  font-size:11px;
+  font-weight:700;
+  min-width:20px;
+  padding:2px 6px;
+  border-radius:10px;
+  text-align:center;
+}
 .sidebar-note {
   font-size:12px;
   line-height:1.7;
@@ -293,6 +305,38 @@ tr:last-child td {
 .badge.done {
   background:#eaf5ed;
   color:#386e47;
+}
+.badge.escalation {
+  background:#fff1e3;
+  color:#9a4d17;
+  border:1px solid #f5cfa8;
+  font-weight:600;
+}
+tr.escalated td {
+  background:#fffaf3;
+}
+tr.escalated td:first-child {
+  box-shadow:inset 3px 0 0 #e8710a;
+}
+.escalation-box {
+  flex-direction:row;
+  align-items:flex-start;
+  gap:10px;
+  border:1px solid #f0d3b5;
+  background:#fffaf3;
+  border-radius:6px;
+  padding:12px;
+  line-height:1.5;
+}
+.escalation-box input {
+  width:auto;
+  margin-top:2px;
+}
+.escalation-box small {
+  display:block;
+  color:#87939b;
+  font-weight:400;
+  font-size:11px;
 }
 .footnote {
   color:#919ba3;

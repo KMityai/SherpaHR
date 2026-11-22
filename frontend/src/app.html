@@ -13,6 +13,9 @@
     @for (p of projects(); track p.id) {
       <button class="project-link" [class.selected]="project()?.id === p.id" [attr.aria-current]="project()?.id === p.id ? 'page' : null" (click)="selectProject(p)">
         <span class="project-icon">{{p.archived ? '▤' : '▧'}}</span><span>{{p.name}}<small>{{p.archived ? 'Архив' : p.task_count + ' задач'}}</small></span>
+        @if (p.escalation_count > 0) {
+          <span class="escalation-count" [attr.title]="'Нужен руководитель: ' + p.escalation_count" [attr.aria-label]="'Нужен руководитель: ' + p.escalation_count">{{p.escalation_count}}</span>
+        }
       </button>
     }
     <div class="sidebar-note">Задачи, договорённости<br>и история команды.</div>
@@ -35,7 +38,10 @@
         @else {
           <div class="table-scroll"><table><thead><tr><th>Задача</th><th>Статус</th><th>Исполнитель</th><th>Срок</th></tr></thead><tbody>
             @for (task of filteredTasks(); track task.id) {
-              <tr><td><button class="task-title" (click)="openTask(task)"><span class="task-number">#{{task.id}}</span>{{task.title}}</button></td><td><span class="badge" [class]="'badge ' + task.status">{{statusLabel(task.status)}}</span></td><td>{{userName(task.assignee_id)}}</td><td>{{task.due_at ? (task.due_at | date:'dd.MM.yyyy HH:mm':'UTC') : 'Без срока'}}</td></tr>
+              <tr [class.escalated]="task.escalated === 1 && task.status !== 'done'">
+                <td><button class="task-title" (click)="openTask(task)"><span class="task-number">#{{task.id}}</span>{{task.title}}</button>
+                  @if (task.escalated === 1 && task.status !== 'done') { <span class="badge escalation">Нужен руководитель</span> }</td>
+                <td><span class="badge" [class]="'badge ' + task.status">{{statusLabel(task.status)}}</span></td><td>{{userName(task.assignee_id)}}</td><td>{{task.due_at ? (task.due_at | date:'dd.MM.yyyy HH:mm':'UTC') : 'Без срока'}}</td></tr>
             } @empty { <tr><td colspan="4" class="empty">Задач по этим условиям нет.</td></tr> }
           </tbody></table></div>
         }
@@ -55,6 +61,10 @@
           <div class="form-row"><label>Статус<select name="status" aria-label="Статус" [(ngModel)]="draft.status">@for (s of statuses; track s.value) { <option [value]="s.value">{{s.label}}</option> }</select></label>
           <label>Исполнитель<select name="assignee" aria-label="Исполнитель" [(ngModel)]="draft.assignee_id"><option [ngValue]="null">Не назначен</option>@for (u of project()?.members; track u.id) { <option [ngValue]="u.id">{{u.name}}</option> }</select></label></div>
           <label>Срок (UTC)<input type="datetime-local" name="due" [(ngModel)]="draft.due_at"></label>
+          <label class="checkbox escalation-box">
+            <input type="checkbox" name="escalated" [(ngModel)]="draft.escalated" [disabled]="!canEscalate()">
+            <span>Нужен руководитель<small>{{canEscalate() ? 'Задача попадёт в список внимания руководителя.' : 'Завершённой задаче руководитель не нужен.'}}</small></span>
+          </label>
           @if (!project()?.archived) { <button type="submit" class="primary" [disabled]="!draft.title.trim()">{{saving() ? 'Сохраняем…' : 'Сохранить задачу'}}</button> }
         </fieldset>
       </form>
