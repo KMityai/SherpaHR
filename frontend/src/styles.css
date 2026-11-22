@@ -319,8 +319,9 @@ tr.escalated td:first-child {
   box-shadow:inset 3px 0 0 #e8710a;
 }
 .escalation-box {
+  display:flex;
   flex-direction:row;
-  align-items:flex-start;
+  align-items:center;
   gap:10px;
   border:1px solid #f0d3b5;
   background:#fffaf3;
@@ -330,7 +331,11 @@ tr.escalated td:first-child {
 }
 .escalation-box input {
   width:auto;
-  margin-top:2px;
+  flex:0 0 auto;
+  margin:0;
+}
+.escalation-box span {
+  flex:1 1 auto;
 }
 .escalation-box small {
   display:block;

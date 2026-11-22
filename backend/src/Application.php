@@ -53,7 +53,8 @@ final class Application
             return;
         }
         if ($method === 'GET' && $path === '/api/projects') {
-            $projects = $this->all('SELECT p.*, (SELECT COUNT(*) FROM tasks t WHERE t.project_id=p.id) AS task_count FROM projects p JOIN project_members m ON m.project_id=p.id WHERE m.user_id=? ORDER BY p.archived,p.id', [$this->userId]);
+            // Count exactly what the task list shows: unassigned tasks belong to the manager only.
+            $projects = $this->all('SELECT p.*, (SELECT COUNT(*) FROM tasks t WHERE t.project_id=p.id AND (t.assignee_id IS NOT NULL OR m.user_id=p.owner_id)) AS task_count FROM projects p JOIN project_members m ON m.project_id=p.id WHERE m.user_id=? ORDER BY p.archived,p.id', [$this->userId]);
             foreach ($projects as &$project) {
                 $project['archived'] = (bool) $project['archived'];
                 $project['members'] = $this->all('SELECT u.* FROM users u JOIN project_members m ON m.user_id=u.id WHERE m.project_id=? ORDER BY u.id', [$project['id']]);
@@ -70,7 +71,7 @@ final class Application
             $project = $this->project((int) $match[1]);
             if ($method === 'GET') {
                 // Escalated tasks go first, the rest keeps the previous order.
-                $this->respond($this->all('SELECT t.* FROM tasks t JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? ORDER BY t.escalated DESC, t.id', [$project['id']]));
+                $this->respond($this->all('SELECT t.* FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? AND (t.assignee_id IS NOT NULL OR ?) ORDER BY t.escalated DESC, t.id', [$project['id'], (int) $this->isManager($project)]));
                 return;
             }
             if ($method === 'POST') {

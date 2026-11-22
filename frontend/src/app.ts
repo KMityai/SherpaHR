@@ -187,6 +187,10 @@ export class AppComponent {
 
   statusLabel(status: string): string { return this.statuses.find(s => s.value === status)?.label ?? status; }
   userName(id: number | null): string { return this.context()?.users.find(u => u.id === id)?.name ?? 'Не назначен'; }
+  /** A finished task cannot need the manager: picking "Готово" clears the flag before saving. */
+  onStatusChange(): void {
+    if (this.draft.status === 'done') this.draft.escalated = false;
+  }
   /** The checkbox is offered only while the task can still need the manager. */
   canEscalate(): boolean { return this.draft.status !== 'done'; }
   private syncList(task: Task, created: boolean): void {
@@ -196,11 +200,17 @@ export class AppComponent {
       // Same order as the server: escalated tasks first, the rest by number.
       return others.sort((a, b) => open(b) - open(a) || a.id - b.id);
     });
-    const escalations = this.tasks().filter(t => t.escalated === 1 && t.status !== 'done').length;
+    // The sidebar mirrors the list that is actually on screen.
+    const rows = this.tasks();
+    const shown = rows.filter(this.visible).length;
+    const escalations = rows.filter(t => t.escalated === 1 && t.status !== 'done').length;
     this.projects.update(list => list.map(p => p.id !== task.project_id ? p : {
-      ...p, task_count: created ? p.task_count + 1 : p.task_count, escalation_count: escalations,
+      ...p, task_count: created ? shown : p.task_count, escalation_count: escalations,
     }));
   }
+  /** Unassigned tasks are the manager's business, the server hides them from everyone else. */
+  private visible = (task: Task): boolean =>
+    task.assignee_id !== null || this.context()?.user.id === this.project()?.owner_id;
   private fail(error: unknown): void { this.error.set(error instanceof Error ? error.message : 'Не удалось выполнить запрос'); }
   private emptyDraft(): TaskDraft {
     return { title: '', description: '', status: 'open', assignee_id: null, due_at: '', escalated: false };

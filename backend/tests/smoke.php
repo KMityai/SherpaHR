@@ -141,8 +141,17 @@ try {
     // Task 12 is escalated by this run, 1 comes from the seed, the created task closes the tail.
     $ids = array_map('intval', array_column($response['data'], 'id'));
     check(array_slice($ids, 0, 3) === [1, 12, $escalated['id']], 'escalated tasks are listed first');
-    check(array_slice($ids, 3) === [2, 3, 4], 'rest keeps task order');
+    $expectedTail = [2 => true, 3 => true, 4 => true, 13 => true];
+    $tailIds = array_keys($expectedTail);
+    sort($tailIds);
+    $tailAsShown = array_values(array_filter($ids, fn($id) => isset($expectedTail[$id])));
+    check($tailAsShown === $tailIds && count(array_intersect(array_slice($ids, 0, 3), $tailIds)) === 0, 'rest keeps task order');
     check(array_slice(array_column($response['data'], 'escalated'), 3) === array_fill(0, count($response['data']) - 3, 0), 'tail carries no flag');
+    // The sidebar count covers exactly the rows of the manager's list.
+    check(count($ids) === request('GET', '/api/projects')[1]['data'][0]['task_count'], 'manager count matches list');
+    // Boris is not the manager: the unassigned task 7 stays hidden and is not counted.
+    $memberIds = array_map('intval', array_column(request('GET', '/api/projects/2/tasks', null, 2)[1]['data'], 'id'));
+    check($memberIds === [5, 6] && 2 === request('GET', '/api/projects', null, 2)[1]['data'][1]['task_count'], 'member list and count hide unassigned');
     // A task can be closed without clearing the checkbox: the flag is dropped, not refused.
     [$status, $response] = request('PATCH', '/api/tasks/' . $escalated['id'], [
         'title' => 'Нужен руководитель', 'description' => '', 'status' => 'done',

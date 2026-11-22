@@ -58,7 +58,7 @@
         <fieldset [disabled]="project()?.archived || saving()">
           <label>Название<input name="title" [(ngModel)]="draft.title" required maxlength="200"></label>
           <label>Описание<textarea name="description" [(ngModel)]="draft.description" rows="4" maxlength="5000"></textarea></label>
-          <div class="form-row"><label>Статус<select name="status" aria-label="Статус" [(ngModel)]="draft.status">@for (s of statuses; track s.value) { <option [value]="s.value">{{s.label}}</option> }</select></label>
+          <div class="form-row"><label>Статус<select name="status" aria-label="Статус" [(ngModel)]="draft.status" (ngModelChange)="onStatusChange()">@for (s of statuses; track s.value) { <option [value]="s.value">{{s.label}}</option> }</select></label>
           <label>Исполнитель<select name="assignee" aria-label="Исполнитель" [(ngModel)]="draft.assignee_id"><option [ngValue]="null">Не назначен</option>@for (u of project()?.members; track u.id) { <option [ngValue]="u.id">{{u.name}}</option> }</select></label></div>
           <label>Срок (UTC)<input type="datetime-local" name="due" [(ngModel)]="draft.due_at"></label>
           <label class="checkbox escalation-box">
