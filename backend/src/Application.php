@@ -76,7 +76,7 @@ final class Application
             if ($method === 'POST') {
                 $this->writable($project);
                 $data = $this->input();
-                $fields = $this->validateTask($data, $project, false);
+                $fields = $this->validateTask($data, $project);
                 $fields = $this->row($fields);
                 $stmt = $this->db->prepare('INSERT INTO tasks (project_id,title,description,status,assignee_id,due_at,escalated,updated_at) VALUES (?,?,?,?,?,?,?,?)');
                 $stmt->execute([$project['id'], $fields['title'], $fields['description'], $fields['status'], $fields['assignee_id'], $fields['due_at'], $fields['escalated'], gmdate('Y-m-d\TH:i:s\Z')]);
@@ -95,7 +95,7 @@ final class Application
                 $project = $this->project($task['project_id']);
                 $this->writable($project);
                 $data = $this->input();
-                $fields = $this->validateTask($data, $project, true);
+                $fields = $this->validateTask($data, $project, false, $task);
                 if (!isset($data['version']) || !is_int($data['version'])) {
                     throw new ApiError('Нужна целочисленная версия задачи', 422);
                 }
@@ -131,7 +131,7 @@ final class Application
         throw new ApiError('Маршрут не найден', 404);
     }
 
-    private function validateTask(array $data, array $project, bool $partial): array
+    private function validateTask(array $data, array $project, bool $partial = false, ?array $current = null): array
     {
         $unknown = array_diff(array_keys($data), ['title', 'description', 'status', 'assignee_id', 'due_at', 'escalated', 'version']);
         if ($unknown) {
@@ -178,15 +178,19 @@ final class Application
             }
             $out['escalated'] = $escalated;
         }
-        $status = $out['status'] ?? null;
-        $escalated = $out['escalated'] ?? null;
-        // A full update always carries a status; a partial one only when it is sent.
-        if ($status === 'done' || ($status === null && $escalated === true)) {
-            // A finished task never requires the manager, so the pair cannot stay inconsistent.
-            if ($escalated === true) {
+        $status = $out['status'] ?? $current['status'] ?? null;
+        $escalated = $out['escalated'] ?? ($current['escalated'] ?? null);
+        // The CHECK constraint keeps a finished task and the manager flag apart.
+        if ($status === 'done') {
+            // Only an explicit flag can be rejected; an escalated task is closed by clearing it.
+            if (($out['escalated'] ?? false) === true) {
                 throw new ApiError('Завершённая задача не может требовать руководителя', 422);
             }
             $out['escalated'] = false;
+            $out['status'] = $status;
+        } elseif ($escalated === true) {
+            // Saving a reopened task leaves its escalation as it was; the flag changes only on its own.
+            $out['status'] = $status;
         }
         if (!$project['archived']) {
             return $out;
