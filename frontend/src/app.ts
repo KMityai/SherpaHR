@@ -203,7 +203,9 @@ export class AppComponent {
     // The sidebar mirrors the list that is actually on screen.
     const rows = this.tasks();
     const shown = rows.filter(this.visible).length;
-    const escalations = rows.filter(t => t.escalated === 1 && t.status !== 'done').length;
+    // Only the manager owns the orange counter; for everyone else it stays zero, as the server says.
+    const manager = this.context()?.user.id === this.project()?.owner_id;
+    const escalations = manager ? rows.filter(t => t.escalated === 1 && t.status !== 'done').length : 0;
     this.projects.update(list => list.map(p => p.id !== task.project_id ? p : {
       ...p, task_count: created ? shown : p.task_count, escalation_count: escalations,
     }));

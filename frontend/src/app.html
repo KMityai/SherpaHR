@@ -58,8 +58,7 @@
         <fieldset [disabled]="project()?.archived || saving()">
           <label>Название<input name="title" [(ngModel)]="draft.title" required maxlength="200"></label>
           <label>Описание<textarea name="description" [(ngModel)]="draft.description" rows="4" maxlength="5000"></textarea></label>
-          <div class="form-row"><label>Статус<select name="status" aria-label="Статус" [(ngModel)]="draft.status" (ngModelChange)="onStatusChange()">@for (s of statuses; track s.value) { <option [value]="s.value">{{s.label}}</option> }</select></label>
-          <label>Исполнитель<select name="assignee" aria-label="Исполнитель" [(ngModel)]="draft.assignee_id"><option [ngValue]="null">Не назначен</option>@for (u of project()?.members; track u.id) { <option [ngValue]="u.id">{{u.name}}</option> }</select></label></div>
+          <div class="form-row"><label>Статус<select name="status" aria-label="Статус" [(ngModel)]="draft.status" (ngModelChange)="onStatusChange()">@for (s of statuses; track s.value) { <option [value]="s.value">{{s.label}}</option> }</select></label><label>Исполнитель<select name="assignee" aria-label="Исполнитель" [(ngModel)]="draft.assignee_id"><option [ngValue]="null">Не назначен</option>@for (u of project()?.members; track u.id) { <option [ngValue]="u.id">{{u.name}}</option> }</select></label></div>
           <label>Срок (UTC)<input type="datetime-local" name="due" [(ngModel)]="draft.due_at"></label>
           <label class="checkbox escalation-box">
             <input type="checkbox" name="escalated" [(ngModel)]="draft.escalated" [disabled]="!canEscalate()">
@@ -68,13 +67,18 @@
           @if (!project()?.archived) { <button type="submit" class="primary" [disabled]="!draft.title.trim()">{{saving() ? 'Сохраняем…' : 'Сохранить задачу'}}</button> }
         </fieldset>
       </form>
-      @if (detail(); as task) {
-        <section class="comments"><h2>Обсуждение <span>{{task.comments.length}}</span></h2>
-          @for (c of task.comments; track c.id) { <article><strong>{{c.author}}</strong><time>{{c.created_at | date:'dd.MM.yyyy HH:mm':'UTC'}}</time><p>{{c.body}}</p></article> }
-          @empty { <p class="muted">Комментариев пока нет.</p> }
-          @if (!project()?.archived) { <form (ngSubmit)="addComment()"><label>Комментарий<textarea name="comment" [(ngModel)]="comment" rows="3" required maxlength="2000" [disabled]="saving()"></textarea></label><button type="submit" [disabled]="!comment.trim() || saving()">Добавить комментарий</button></form> }
-        </section>
-      }
+          @if (detail(); as task) {
+            <section class="comments"><h2>Обсуждение <span>{{task.comments.length}}</span></h2>
+              @for (c of task.comments; track c.id) { <article><strong>{{c.author}}</strong><time>{{c.created_at | date:'dd.MM.yyyy HH:mm':'UTC'}}</time><p>{{c.body}}</p></article> }
+              @empty { <p class="muted">Комментариев пока нет.</p> }
+            </section>
+          }
+          @if (detail() && !project()?.archived) {
+            <form class="comment-form" (ngSubmit)="addComment()">
+              <label>Комментарий<textarea name="comment" [(ngModel)]="comment" rows="3" maxlength="2000" [disabled]="saving()"></textarea></label>
+              <button type="submit" [disabled]="!comment.trim() || saving()">{{saving() ? 'Отправляем…' : 'Добавить комментарий'}}</button>
+            </form>
+          }
     </aside>
   }
 </div>
