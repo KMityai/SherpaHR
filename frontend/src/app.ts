@@ -4,6 +4,11 @@ import { FormsModule } from '@angular/forms';
 import { Api } from './api';
 import { Comment, Context, Project, Task, TaskDetail, TaskStatus } from './models';
 
+/** Editable task fields, kept apart from the response shape. */
+interface TaskDraft {
+  title: string; description: string; status: TaskStatus; assignee_id: number | null; due_at: string; escalated: boolean;
+}
+
 @Component({
   selector: 'app-root',
   standalone: true,
@@ -35,8 +40,10 @@ export class AppComponent {
 
   constructor() { void this.load(); }
 
+  /** First load picks the project that needs the manager; a persona switch keeps a plain order. */
   async load(): Promise<void> {
     const generation = ++this.generation;
+    const initial = !this.context();
     this.loading.set(true);
     this.error.set('');
     this.closeDetail();
@@ -47,7 +54,11 @@ export class AppComponent {
       if (generation !== this.generation) return;
       this.context.set(context);
       this.projects.set(projects);
-      const project = projects.find(p => p.id === this.project()?.id) ?? projects[0];
+      // The morning starts where the manager is needed: the project with most open escalations.
+      const problem = initial
+        ? projects.filter(p => p.escalation_count > 0).sort((a, b) => b.escalation_count - a.escalation_count)[0]
+        : undefined;
+      const project = problem ?? projects.find(p => p.id === this.project()?.id) ?? projects[0];
       if (project) await this.selectProject(project);
     } catch (error) {
       if (generation === this.generation) this.fail(error);
@@ -105,6 +116,7 @@ export class AppComponent {
         title: detail.title, description: detail.description, status: detail.status,
         assignee_id: detail.assignee_id,
         due_at: detail.due_at ? detail.due_at.slice(0, 16) : '',
+        escalated: detail.escalated === 1,
       };
     } catch (error) {
       if (generation === this.detailGeneration) this.fail(error);
@@ -140,8 +152,7 @@ export class AppComponent {
       };
       const task = await this.api.request<Task>(existing ? `/tasks/${existing.id}` : `/projects/${project.id}/tasks`, existing ? 'PATCH' : 'POST', data);
       if (userId !== this.api.userId || this.project()?.id !== project.id) return;
-      if (!existing) this.projects.update(list => list.map(p => p.id === project.id ? { ...p, task_count: p.task_count + 1 } : p));
-      this.tasks.update(list => existing ? list.map(t => t.id === task.id ? task : t) : [...list, task]);
+      this.syncList(task, !existing);
       if (generation === this.detailGeneration) {
         // Saving fields must not erase a comment the user has not sent yet.
         this.detail.set({ ...task, comments: existing?.comments ?? [] });
@@ -149,6 +160,7 @@ export class AppComponent {
         this.draft = {
           title: task.title, description: task.description, status: task.status,
           assignee_id: task.assignee_id, due_at: task.due_at?.slice(0, 16) ?? '',
+          escalated: task.escalated === 1,
         };
         this.notice.set('Задача сохранена');
       }
@@ -175,8 +187,34 @@ export class AppComponent {
 
   statusLabel(status: string): string { return this.statuses.find(s => s.value === status)?.label ?? status; }
   userName(id: number | null): string { return this.context()?.users.find(u => u.id === id)?.name ?? 'Не назначен'; }
+  /** A finished task cannot need the manager: picking "Готово" clears the flag before saving. */
+  onStatusChange(): void {
+    if (this.draft.status === 'done') this.draft.escalated = false;
+  }
+  /** The checkbox is offered only while the task can still need the manager. */
+  canEscalate(): boolean { return this.draft.status !== 'done'; }
+  private syncList(task: Task, created: boolean): void {
+    this.tasks.update(list => {
+      const others = (created ? list : list.filter(t => t.id !== task.id)).concat(task);
+      const open = (t: Task) => Number(t.escalated === 1 && t.status !== 'done');
+      // Same order as the server: escalated tasks first, the rest by number.
+      return others.sort((a, b) => open(b) - open(a) || a.id - b.id);
+    });
+    // The sidebar mirrors the list that is actually on screen.
+    const rows = this.tasks();
+    const shown = rows.filter(this.visible).length;
+    // Only the manager owns the orange counter; for everyone else it stays zero, as the server says.
+    const manager = this.context()?.user.id === this.project()?.owner_id;
+    const escalations = manager ? rows.filter(t => t.escalated === 1 && t.status !== 'done').length : 0;
+    this.projects.update(list => list.map(p => p.id !== task.project_id ? p : {
+      ...p, task_count: created ? shown : p.task_count, escalation_count: escalations,
+    }));
+  }
+  /** Unassigned tasks are the manager's business, the server hides them from everyone else. */
+  private visible = (task: Task): boolean =>
+    task.assignee_id !== null || this.context()?.user.id === this.project()?.owner_id;
   private fail(error: unknown): void { this.error.set(error instanceof Error ? error.message : 'Не удалось выполнить запрос'); }
-  private emptyDraft(): { title: string; description: string; status: TaskStatus; assignee_id: number | null; due_at: string } {
-    return { title: '', description: '', status: 'open', assignee_id: null, due_at: '' };
+  private emptyDraft(): TaskDraft {
+    return { title: '', description: '', status: 'open', assignee_id: null, due_at: '', escalated: false };
   }
 }
